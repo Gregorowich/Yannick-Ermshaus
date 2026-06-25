@@ -1,13 +1,7 @@
 // J.A.R.V.I.S. – Frontend-Logik + HUD
-// Ablauf: einmal antippen zum Starten (schaltet auf iOS Mikrofon + Ton frei),
-//         dann Weckwort "Jarvis" (Porcupine) ODER Klick -> Aufnahme bis Stille
-//         -> Upload an /api/chat -> Antwort anzeigen + vorlesen.
-// Zusätzlich: animiertes HUD im Hintergrund + Kugel reagiert auf die Lautstärke.
-
-import { PorcupineWorker, BuiltInKeyword } from
-  "https://cdn.jsdelivr.net/npm/@picovoice/porcupine-web@3.0.3/dist/esm/index.js";
-import { WebVoiceProcessor } from
-  "https://cdn.jsdelivr.net/npm/@picovoice/web-voice-processor@4.0.9/dist/esm/index.js";
+// Freihändiger Gesprächsmodus: einmal antippen zum Starten (schaltet auf iOS
+// Mikrofon + Ton frei). Danach hört Jarvis DURCHGEHEND zu – einfach drauflos
+// reden, er antwortet, und es geht weiter. Tippen pausiert/setzt fort.
 
 const orb = document.getElementById("orb");
 const statusEl = document.getElementById("status");
@@ -33,15 +27,27 @@ tickClock();
 setInterval(tickClock, 1000);
 
 const sessionId = crypto.randomUUID();
-let porcupine = null;
 let audioCtx = null;     // gemeinsamer, per Geste freigeschalteter Audio-Kontext
 let started = false;     // wurde die Start-Geste schon ausgeführt?
-let busy = false;        // Aufnahme/Verarbeitung/Sprechen läuft
 
-// Stimm-Reaktivität: aktiver Analyser (Mikro beim Zuhören, Wiedergabe beim Sprechen)
+// Gesprächsmodus
+let micStream = null;    // dauerhaft offenes Mikrofon
+let vad = null;          // Analyser für Sprach-Erkennung (VAD)
+let vadData = null;
+let convoOn = false;     // Gesprächsmodus aktiv (hört zu)
+let capturing = false;   // nimmt gerade eine Äußerung auf
+let speaking = false;    // Jarvis gibt gerade Audio aus
+let busy = false;        // Verarbeitung läuft
+let onsetAt = 0;         // Zeitpunkt des Sprechbeginns
+let cooldownUntil = 0;   // kurz nach dem Sprechen nicht sofort wieder zuhören
+
+// Stimm-Reaktivität: aktiver Analyser steuert Kugel + Waveform
 let activeAnalyser = null;
 let activeData = null;
-let level = 0; // geglättete Lautstärke 0..1, steuert die Kugel
+let level = 0;
+
+const HINT_LISTEN = "Sprich einfach – ich höre zu.";
+const HINT_PAUSED = "Pausiert – tippe zum Fortsetzen.";
 
 // ---- Zustands-Anzeige -------------------------------------------------
 function setState(state, text) {
@@ -72,20 +78,159 @@ function rmsFrom(analyser, data) {
   return Math.sqrt(sum / data.length);
 }
 
+function delay(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
 // ---- Start (einmalige Geste) -----------------------------------------
 async function start() {
   if (started) return;
   try {
-    await ensureAudio(); // Ton auf iOS freischalten
-    // kurze Boot-Sequenz (Flavor)
-    await bootSequence();
-    await initWakeWord(); // Mikrofon + Weckwort aktivieren
+    await ensureAudio();
+    setState("thinking", "Systeme online …");
+    await delay(450);
+    setState("thinking", "Stimme kalibriert …");
+    await delay(350);
+    await startConversation(); // Mikrofon dauerhaft öffnen
     started = true;
-    greet(); // Begrüßung + Wetter (läuft im Hintergrund weiter)
+    greet(); // Begrüßung + Wetter (läuft nebenher)
   } catch (err) {
     console.error(err);
     setState("error", "Mikrofon nicht verfügbar. Bitte erlauben und Seite neu laden.");
   }
+}
+
+// ---- Gesprächsmodus: dauerhaft zuhören -------------------------------
+async function startConversation() {
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const src = audioCtx.createMediaStreamSource(micStream);
+  vad = audioCtx.createAnalyser();
+  vad.fftSize = 2048;
+  src.connect(vad);
+  vadData = new Uint8Array(vad.fftSize);
+
+  activeAnalyser = vad; // Kugel reagiert auf deine Stimme
+  activeData = vadData;
+  convoOn = true;
+  setState("sleeping", HINT_LISTEN);
+  monitorLoop();
+}
+
+function monitorLoop() {
+  if (!convoOn) return;
+  if (!capturing && !speaking && !busy && Date.now() > cooldownUntil) {
+    const rms = rmsFrom(vad, vadData);
+    const now = Date.now();
+    if (rms > 0.03) {
+      if (!onsetAt) onsetAt = now;
+      else if (now - onsetAt > 160) { onsetAt = 0; captureUtterance(); }
+    } else {
+      onsetAt = 0;
+    }
+  }
+  setTimeout(monitorLoop, 60);
+}
+
+// Nimmt eine Äußerung auf (bis Stille) und verarbeitet sie.
+async function captureUtterance() {
+  if (capturing || busy || speaking) return;
+  capturing = true;
+  busy = true;
+  youEl.classList.add("hidden");
+  jarvisEl.classList.add("hidden");
+  setState("listening", "Ich höre …");
+
+  try {
+    const blob = await recordUntilSilence();
+    capturing = false;
+    setState("thinking", "Einen Moment …");
+    await sendAndRespond(blob);
+  } catch (err) {
+    console.error(err);
+    setState("error", "Entschuldigung, etwas ist schiefgelaufen.");
+    await delay(2000);
+  } finally {
+    capturing = false;
+    busy = false;
+    if (convoOn) setState("sleeping", HINT_LISTEN);
+  }
+}
+
+function recordUntilSilence() {
+  const recorder = new MediaRecorder(micStream);
+  const chunks = [];
+  recorder.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
+
+  return new Promise((resolve) => {
+    const SILENCE = 0.02;
+    const SILENCE_MS = 1000;
+    const MIN_MS = 400;
+    const MAX_MS = 12000;
+    let lastLoud = Date.now();
+    const startedAt = Date.now();
+
+    recorder.onstop = () => {
+      clearInterval(timer);
+      resolve(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }));
+    };
+    const timer = setInterval(() => {
+      const rms = rmsFrom(vad, vadData);
+      const now = Date.now();
+      if (rms > SILENCE) lastLoud = now;
+      const longEnough = now - startedAt > MIN_MS;
+      if ((longEnough && now - lastLoud > SILENCE_MS) || now - startedAt > MAX_MS) {
+        if (recorder.state !== "inactive") recorder.stop();
+      }
+    }, 80);
+    recorder.start();
+  });
+}
+
+async function sendAndRespond(blob) {
+  const form = new FormData();
+  form.append("audio", blob, "aufnahme");
+  form.append("sessionId", sessionId);
+
+  const res = await fetch("/api/chat", { method: "POST", body: form });
+  if (!res.ok) throw new Error("Serverfehler " + res.status);
+  const { transcript, reply, audio } = await res.json();
+
+  if (!transcript) {
+    // nichts Verständliches gehört – einfach weiter zuhören
+    return;
+  }
+  showBubble(youEl, transcript);
+  showBubble(jarvisEl, reply);
+  if (audio) {
+    setState("speaking", "");
+    try { await playAudioBase64(audio); } catch (e) { console.warn("Wiedergabe:", e); }
+  }
+}
+
+// ---- Antwort-Audio abspielen (iOS-sicher) + reaktiv -------------------
+async function playAudioBase64(b64) {
+  await ensureAudio();
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const buffer = await audioCtx.decodeAudioData(bytes.buffer);
+
+  const analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  const data = new Uint8Array(analyser.fftSize);
+
+  speaking = true;
+  await new Promise((resolve) => {
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(analyser);
+    analyser.connect(audioCtx.destination);
+    activeAnalyser = analyser; // Kugel reagiert auf Jarvis' Stimme
+    activeData = data;
+    src.onended = resolve;
+    src.start();
+  });
+  speaking = false;
+  cooldownUntil = Date.now() + 450; // kurze Pause, damit er sich nicht selbst hört
+  // Kugel wieder auf Mikro (im Gesprächsmodus), sonst aus
+  activeAnalyser = convoOn ? vad : null;
+  activeData = convoOn ? vadData : null;
 }
 
 // ---- Begrüßung beim Öffnen (mit Wetter, wenn Standort erlaubt) --------
@@ -94,7 +239,7 @@ function getPosition() {
     if (!navigator.geolocation) return resolve(null);
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-      () => resolve(null), // Ablehnung/Fehler -> ohne Wetter begrüßen
+      () => resolve(null),
       { timeout: 8000, maximumAge: 600000 },
     );
   });
@@ -120,20 +265,18 @@ async function greet() {
     const res = await fetch("/api/greeting", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        lat: pos?.lat, lon: pos?.lon, hour: new Date().getHours(),
-      }),
+      body: JSON.stringify({ lat: pos?.lat, lon: pos?.lon, hour: new Date().getHours() }),
     });
     if (!res.ok) throw new Error("greeting " + res.status);
     const { text, weather, audio } = await res.json();
     fillWeather(weather);
     if (sysStatusEl) sysStatusEl.textContent = "System bereit";
-    if (busy) return; // falls der Nutzer schon spricht: Gruß nicht überlagern
+    if (capturing || busy) return; // falls der Nutzer schon spricht: nicht überlagern
     if (text) showBubble(jarvisEl, text);
     if (audio) {
       setState("speaking", "");
       try { await playAudioBase64(audio); } catch (e) { console.warn(e); }
-      if (!busy) setState("sleeping", porcupine ? 'Bereit. Sag „Jarvis" …' : "Tippe die Kugel zum Sprechen.");
+      if (convoOn && !busy) setState("sleeping", HINT_LISTEN);
     }
   } catch (err) {
     console.warn("Begrüßung übersprungen:", err);
@@ -141,182 +284,27 @@ async function greet() {
   }
 }
 
-function delay(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function bootSequence() {
-  setState("thinking", "Systeme online …");
-  await delay(450);
-  setState("thinking", "Stimme kalibriert …");
-  await delay(450);
-}
-
-// ---- Weckwort (Porcupine) --------------------------------------------
-async function initWakeWord() {
-  let accessKey = "";
-  try {
-    const res = await fetch("/api/config");
-    accessKey = (await res.json()).picovoiceAccessKey || "";
-  } catch { /* ignoriert */ }
-
-  if (!accessKey) {
-    setState("sleeping", "Tippe die Kugel zum Sprechen.");
-    return;
-  }
-
-  // Weckwort ist optional: scheitert die Einrichtung, NICHT abbrechen.
-  try {
-    porcupine = await PorcupineWorker.create(
-      accessKey,
-      [BuiltInKeyword.Jarvis],
-      onWakeWord,
-      { publicPath: "/models/porcupine_params.pv" },
-    );
-    await WebVoiceProcessor.subscribe(porcupine);
-    setState("sleeping", 'Bereit. Sag „Jarvis" …');
-  } catch (err) {
-    console.warn("Weckwort nicht verfügbar, nutze Tippen:", err);
-    porcupine = null;
-    setState("sleeping", "Tippe die Kugel zum Sprechen.");
-  }
-}
-
-async function onWakeWord() {
-  if (busy) return;
-  if (porcupine) await WebVoiceProcessor.unsubscribe(porcupine);
-  try {
-    await recordAndRespond();
-  } finally {
-    if (porcupine) await WebVoiceProcessor.subscribe(porcupine);
-    if (!busy) setState("sleeping", 'Bereit. Sag „Jarvis" …');
-  }
-}
-
-// ---- Aufnahme mit Stille-Erkennung -----------------------------------
-async function recordCommand() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  await ensureAudio();
-
-  const source = audioCtx.createMediaStreamSource(stream);
-  const analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 2048;
-  source.connect(analyser);
-  const data = new Uint8Array(analyser.fftSize);
-
-  // Kugel reagiert nun auf das Mikrofon
-  activeAnalyser = analyser;
-  activeData = data;
-
-  const recorder = new MediaRecorder(stream);
-  const chunks = [];
-  recorder.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
-
-  return new Promise((resolve) => {
-    const SILENCE = 0.012;
-    const SILENCE_MS = 1200;
-    const MAX_MS = 9000;
-    let lastLoud = Date.now();
-    const startedAt = Date.now();
-
-    recorder.onstop = () => {
-      clearInterval(timer);
-      activeAnalyser = null;
-      activeData = null;
-      stream.getTracks().forEach((t) => t.stop());
-      try { source.disconnect(); } catch { /* egal */ }
-      resolve(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }));
-    };
-
-    const timer = setInterval(() => {
-      const rms = rmsFrom(analyser, data);
-      const now = Date.now();
-      if (rms > SILENCE) lastLoud = now;
-      if (now - lastLoud > SILENCE_MS || now - startedAt > MAX_MS) {
-        if (recorder.state !== "inactive") recorder.stop();
-      }
-    }, 100);
-
-    recorder.start();
-  });
-}
-
-// ---- Antwort-Audio über Web Audio abspielen (iOS-sicher) + reaktiv ----
-async function playAudioBase64(b64) {
-  await ensureAudio();
-  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  const buffer = await audioCtx.decodeAudioData(bytes.buffer);
-
-  const analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 2048;
-  const data = new Uint8Array(analyser.fftSize);
-
-  await new Promise((resolve) => {
-    const src = audioCtx.createBufferSource();
-    src.buffer = buffer;
-    src.connect(analyser);
-    analyser.connect(audioCtx.destination);
-    activeAnalyser = analyser;
-    activeData = data;
-    src.onended = () => {
-      activeAnalyser = null;
-      activeData = null;
-      resolve();
-    };
-    src.start();
-  });
-}
-
-async function recordAndRespond() {
-  if (busy) return;
-  busy = true;
-  youEl.classList.add("hidden");
-  jarvisEl.classList.add("hidden");
-
-  try {
-    setState("listening", "Ich höre …");
-    const blob = await recordCommand();
-
-    setState("thinking", "Einen Moment …");
-    const form = new FormData();
-    form.append("audio", blob, "aufnahme");
-    form.append("sessionId", sessionId);
-
-    const res = await fetch("/api/chat", { method: "POST", body: form });
-    if (!res.ok) throw new Error("Serverfehler " + res.status);
-    const { transcript, reply, audio } = await res.json();
-
-    if (!transcript) {
-      setState("sleeping", "Ich habe nichts verstanden.");
-      return;
-    }
-    showBubble(youEl, transcript);
-    showBubble(jarvisEl, reply);
-
-    if (audio) {
-      setState("speaking", "");
-      try { await playAudioBase64(audio); } catch (e) { console.warn("Wiedergabe:", e); }
-    }
-    setState("sleeping", 'Bereit. Sag „Jarvis" …');
-  } catch (err) {
-    console.error(err);
-    setState("error", "Entschuldigung, etwas ist schiefgelaufen.");
-    setTimeout(() => setState("sleeping", 'Bereit. Sag „Jarvis" …'), 2500);
-  } finally {
-    busy = false;
-  }
-}
-
-// Klick auf die Kugel: erst Start-Geste, danach manuelles Auslösen.
+// ---- Tippen: starten, bzw. Gesprächsmodus pausieren/fortsetzen --------
 orb.addEventListener("click", () => {
   if (!started) { start(); return; }
-  if (!busy) recordAndRespond();
+  if (convoOn) {
+    convoOn = false;
+    activeAnalyser = null;
+    activeData = null;
+    setState("sleeping", HINT_PAUSED);
+  } else {
+    convoOn = true;
+    activeAnalyser = vad;
+    activeData = vadData;
+    setState("sleeping", HINT_LISTEN);
+    monitorLoop();
+  }
 });
 
 setState("sleeping", "Zum Starten antippen");
 
 // =====================================================================
-//  HUD-Hintergrund (Canvas) + Lautstärke-Glättung für die Kugel
+//  HUD-Hintergrund (Canvas) + Waveform + Lautstärke-Glättung
 // =====================================================================
 const ctx = canvas.getContext("2d");
 const wctx = waveCanvas.getContext("2d");
@@ -337,7 +325,6 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-// Voice-reaktive Waveform am unteren Rand.
 const waveData = new Uint8Array(256);
 function drawWave(t) {
   if (!WW) return;
@@ -351,7 +338,6 @@ function drawWave(t) {
       activeAnalyser.getByteTimeDomainData(waveData);
       v = (waveData[i] - 128) / 128;
     } else {
-      // Ruhepuls: feine, langsam wandernde Sinuswelle
       v = Math.sin(i * 0.18 + t * 0.004) * (0.06 + level * 0.1);
     }
     const x = (i / (N - 1)) * WW;
@@ -366,11 +352,9 @@ function drawWave(t) {
   wctx.shadowBlur = 0;
 }
 
-// Partikelfeld
 for (let i = 0; i < 64; i++) {
   particles.push({
-    x: Math.random() * W,
-    y: Math.random() * H,
+    x: Math.random() * W, y: Math.random() * H,
     r: (Math.random() * 1.4 + 0.3) * DPR,
     vx: (Math.random() - 0.5) * 0.15 * DPR,
     vy: (Math.random() - 0.5) * 0.15 * DPR,
@@ -384,10 +368,8 @@ function drawHud(t) {
   const cy = H * 0.46;
   const base = Math.min(W, H);
 
-  // dezentes Partikelfeld
   for (const p of particles) {
-    p.x += p.vx;
-    p.y += p.vy;
+    p.x += p.vx; p.y += p.vy;
     if (p.x < 0) p.x = W; else if (p.x > W) p.x = 0;
     if (p.y < 0) p.y = H; else if (p.y > H) p.y = 0;
     ctx.beginPath();
@@ -396,7 +378,6 @@ function drawHud(t) {
     ctx.fill();
   }
 
-  // konzentrische, rotierende HUD-Bögen um die Kugel
   const intensity = 0.12 + level * 0.5;
   const rings = [
     { r: base * 0.30, speed: 0.00008, dash: [6 * DPR, 26 * DPR], width: 1.2 * DPR, span: Math.PI * 1.4 },
@@ -417,10 +398,8 @@ function drawHud(t) {
   }
   ctx.setLineDash([]);
 
-  // Eck-Klammern (HUD-Rahmen)
   drawCorners(28 * DPR, 26 * DPR, 0.22);
 
-  // langsam wandernde Scan-Linie
   const scanY = (Math.sin(t * 0.00018) * 0.5 + 0.5) * H;
   const grd = ctx.createLinearGradient(0, scanY - 40 * DPR, 0, scanY + 40 * DPR);
   grd.addColorStop(0, "rgba(56,189,248,0)");
@@ -447,12 +426,11 @@ function drawCorners(len, pad, alpha) {
 }
 
 function loop(t) {
-  // Ziel-Lautstärke: aus aktivem Analyser, sonst sanfter Ruhepuls
   let target;
   if (activeAnalyser && activeData) {
     target = Math.min(1, rmsFrom(activeAnalyser, activeData) * 4);
   } else {
-    target = 0.06 + Math.sin(t * 0.002) * 0.04; // „atmet" leicht
+    target = 0.06 + Math.sin(t * 0.002) * 0.04;
   }
   level += (target - level) * 0.2;
   document.documentElement.style.setProperty("--level", level.toFixed(3));
