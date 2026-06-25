@@ -121,7 +121,7 @@ function monitorLoop() {
     const now = Date.now();
     if (rms > 0.03) {
       if (!onsetAt) onsetAt = now;
-      else if (now - onsetAt > 160) { onsetAt = 0; captureUtterance(); }
+      else if (now - onsetAt > 120) { onsetAt = 0; captureUtterance(); }
     } else {
       onsetAt = 0;
     }
@@ -161,8 +161,8 @@ function recordUntilSilence() {
 
   return new Promise((resolve) => {
     const SILENCE = 0.02;
-    const SILENCE_MS = 1000;
-    const MIN_MS = 400;
+    const SILENCE_MS = 600; // schneller reagieren, sobald du fertig bist
+    const MIN_MS = 300;
     const MAX_MS = 12000;
     let lastLoud = Date.now();
     const startedAt = Date.now();
@@ -367,46 +367,145 @@ function drawHud(t) {
   const cx = W / 2;
   const cy = H * 0.46;
   const base = Math.min(W, H);
+  const intensity = 0.12 + level * 0.55;
 
+  drawGrid();
+  drawParticles();
+  drawRadarSweep(cx, cy, base * 0.47, t);
+  drawReactorRings(cx, cy, base, t, intensity);
+  drawEqBars(t);
+  drawReadouts(t);
+  drawCorners(30 * DPR, 22 * DPR, 0.25);
+  drawScan(t);
+}
+
+function drawGrid() {
+  const step = 48 * DPR;
+  ctx.strokeStyle = "rgba(56,189,248,0.045)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 0; x <= W; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+  for (let y = 0; y <= H; y += step) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  ctx.stroke();
+}
+
+function drawParticles() {
   for (const p of particles) {
     p.x += p.vx; p.y += p.vy;
     if (p.x < 0) p.x = W; else if (p.x > W) p.x = 0;
     if (p.y < 0) p.y = H; else if (p.y > H) p.y = 0;
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(125, 211, 252, ${p.a * (0.5 + level * 0.5)})`;
+    ctx.fillStyle = `rgba(125, 211, 252, ${p.a * (0.45 + level * 0.55)})`;
     ctx.fill();
   }
+}
 
-  const intensity = 0.12 + level * 0.5;
-  const rings = [
-    { r: base * 0.30, speed: 0.00008, dash: [6 * DPR, 26 * DPR], width: 1.2 * DPR, span: Math.PI * 1.4 },
-    { r: base * 0.37, speed: -0.00005, dash: [40 * DPR, 18 * DPR], width: 1 * DPR, span: Math.PI * 0.5 },
-    { r: base * 0.44, speed: 0.00003, dash: [2 * DPR, 14 * DPR], width: 1 * DPR, span: Math.PI * 2 },
-  ];
-  for (const ring of rings) {
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate((t * ring.speed) % (Math.PI * 2));
+// rotierender Radar-Sweep um den Reaktor
+function drawRadarSweep(cx, cy, r, t) {
+  const ang = (t * 0.0006) % (Math.PI * 2);
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(ang);
+  const g = ctx.createLinearGradient(0, 0, r, 0);
+  g.addColorStop(0, "rgba(56,189,248,0)");
+  g.addColorStop(1, `rgba(56,189,248,${0.10 + level * 0.12})`);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.arc(0, 0, r, -0.32, 0);
+  ctx.closePath();
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.restore();
+}
+
+// segmentierte Reaktor-Ringe + Tick-Skala + Mittendreieck
+function drawReactorRings(cx, cy, base, t, intensity) {
+  drawSegments(cx, cy, base * 0.30, 48, t * 0.00006, 0.05, intensity);
+  drawSegments(cx, cy, base * 0.375, 72, -t * 0.00004, 0.04, intensity * 0.8);
+
+  // Tick-Skala
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate((t * 0.00002) % (Math.PI * 2));
+  for (let i = 0; i < 90; i++) {
+    const a = (i / 90) * Math.PI * 2;
+    const major = i % 5 === 0;
+    const r1 = base * 0.43;
+    const r2 = base * 0.45 + (major ? base * 0.012 : 0);
     ctx.beginPath();
-    ctx.setLineDash(ring.dash);
-    ctx.arc(0, 0, ring.r, 0, ring.span);
-    ctx.strokeStyle = `rgba(56, 189, 248, ${intensity})`;
-    ctx.lineWidth = ring.width;
+    ctx.moveTo(Math.cos(a) * r1, Math.sin(a) * r1);
+    ctx.lineTo(Math.cos(a) * r2, Math.sin(a) * r2);
+    ctx.strokeStyle = `rgba(56,189,248,${(major ? 0.28 : 0.1) + intensity * 0.1})`;
+    ctx.lineWidth = (major ? 1.6 : 1) * DPR;
     ctx.stroke();
-    ctx.restore();
   }
-  ctx.setLineDash([]);
+  ctx.restore();
 
-  drawCorners(28 * DPR, 26 * DPR, 0.22);
+  // Mittendreieck (Reaktor-Andeutung)
+  ctx.save();
+  ctx.translate(cx, cy);
+  const tr = base * 0.13;
+  ctx.beginPath();
+  ctx.moveTo(0, -tr);
+  ctx.lineTo(tr * 0.87, tr * 0.5);
+  ctx.lineTo(-tr * 0.87, tr * 0.5);
+  ctx.closePath();
+  ctx.strokeStyle = `rgba(125,211,252,${0.2 + intensity * 0.35})`;
+  ctx.lineWidth = 1.2 * DPR;
+  ctx.stroke();
+  ctx.restore();
+}
 
-  const scanY = (Math.sin(t * 0.00018) * 0.5 + 0.5) * H;
-  const grd = ctx.createLinearGradient(0, scanY - 40 * DPR, 0, scanY + 40 * DPR);
-  grd.addColorStop(0, "rgba(56,189,248,0)");
-  grd.addColorStop(0.5, `rgba(56,189,248,${0.05 + level * 0.05})`);
-  grd.addColorStop(1, "rgba(56,189,248,0)");
-  ctx.fillStyle = grd;
-  ctx.fillRect(0, scanY - 40 * DPR, W, 80 * DPR);
+function drawSegments(cx, cy, r, count, rot, gap, intensity) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rot % (Math.PI * 2));
+  const seg = (Math.PI * 2) / count;
+  for (let i = 0; i < count; i++) {
+    const a0 = i * seg;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, a0, a0 + seg - gap);
+    ctx.strokeStyle = `rgba(56,189,248,${(i % 3 === 0 ? 0.26 : 0.1) + intensity * 0.1})`;
+    ctx.lineWidth = 2 * DPR;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// Telemetrie-/Equalizer-Balken links und rechts
+function drawEqBars(t) {
+  const n = 22;
+  const h = H * 0.5;
+  const y0 = H * 0.25;
+  drawEqColumn(W * 0.05, y0, h, n, t, 1);
+  drawEqColumn(W * 0.95, y0, h, n, t, -1);
+}
+function drawEqColumn(x, y0, h, n, t, dir) {
+  const gap = h / n;
+  for (let i = 0; i < n; i++) {
+    const amp = (Math.sin(i * 0.5 + t * 0.004) * 0.5 + 0.5) * (0.3 + level * 0.7);
+    const w = (8 + amp * 46) * DPR;
+    const yy = y0 + i * gap;
+    ctx.fillStyle = `rgba(56,189,248,${0.07 + amp * 0.22})`;
+    ctx.fillRect(dir > 0 ? x : x - w, yy, w, gap * 0.55);
+  }
+}
+
+// Daten-Readouts in den unteren Ecken (über dem Footer)
+function drawReadouts(t) {
+  ctx.fillStyle = "rgba(125,211,252,0.45)";
+  ctx.font = `${11 * DPR}px "Rajdhani", "Courier New", monospace`;
+  const load = 60 + Math.round(Math.sin(t * 0.001) * 8 + 18);
+  const y1 = H - 96 * DPR;
+  const y2 = H - 80 * DPR;
+  ctx.textAlign = "left";
+  ctx.fillText(`SYS LOAD ${load}%`, 22 * DPR, y1);
+  ctx.fillText(`SECURE LINK · ACTIVE`, 22 * DPR, y2);
+  ctx.textAlign = "right";
+  ctx.fillText(`UPLINK ${(0.9 + Math.random() * 0.09).toFixed(2)} Gb/s`, W - 22 * DPR, y1);
+  ctx.fillText(`CORE TEMP ${36 + Math.round(level * 8)}°`, W - 22 * DPR, y2);
+  ctx.textAlign = "left";
 }
 
 function drawCorners(len, pad, alpha) {
@@ -423,6 +522,16 @@ function drawCorners(len, pad, alpha) {
     ctx.lineTo(x + sx * len, y);
     ctx.stroke();
   }
+}
+
+function drawScan(t) {
+  const scanY = (Math.sin(t * 0.00018) * 0.5 + 0.5) * H;
+  const grd = ctx.createLinearGradient(0, scanY - 40 * DPR, 0, scanY + 40 * DPR);
+  grd.addColorStop(0, "rgba(56,189,248,0)");
+  grd.addColorStop(0.5, `rgba(56,189,248,${0.05 + level * 0.06})`);
+  grd.addColorStop(1, "rgba(56,189,248,0)");
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, scanY - 40 * DPR, W, 80 * DPR);
 }
 
 function loop(t) {

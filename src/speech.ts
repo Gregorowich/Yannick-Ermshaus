@@ -47,15 +47,16 @@ export async function transcribe(audio: Buffer, mimeType = "audio/webm"): Promis
 export async function synthesize(text: string): Promise<Buffer> {
   const speech = await openaiClient().audio.speech.create({
     model: "gpt-4o-mini-tts",
-    voice: "onyx", // tiefe, ruhige Stimme – passt zur Jarvis-Persona
+    voice: "ash", // ausdrucksstärkere, wachere Stimme
     input: text,
-    // Steuert den Charakter der Stimme: ruhiger, gelassener Butler im Stil von
-    // J.A.R.V.I.S. aus Iron Man – höflich, souverän, leicht britisch-trocken.
+    // Steuert den Charakter der Stimme: lebendiger, wacher, energischer
+    // Hightech-Assistent im Stil von J.A.R.V.I.S. – selbstbewusst und präsent.
     instructions:
-      "Sprich Deutsch als J.A.R.V.I.S., der kultivierte Butler-Assistent aus " +
-      "Iron Man: ruhig, gelassen und souverän, höflich und diskret, mit einem " +
-      "Hauch trockener, britischer Eleganz. Mäßiges, gleichmäßiges Tempo, warme " +
-      "tiefe Stimme, klar artikuliert, niemals hektisch oder überschwänglich.",
+      "Sprich Deutsch als J.A.R.V.I.S., ein wacher, lebendiger und energischer " +
+      "Hightech-Assistent. Klar, selbstbewusst und präsent, mit natürlicher " +
+      "Betonung, Melodie und Dynamik – niemals monoton oder schläfrig. Freundlich " +
+      "und zugewandt, mit einem leichten, smarten Schwung, aber nicht hektisch. " +
+      "Lebendiges, flüssiges Tempo und deutliche, akzentuierte Aussprache.",
     response_format: "mp3",
   });
 
