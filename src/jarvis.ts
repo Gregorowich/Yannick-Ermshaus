@@ -38,8 +38,11 @@ export async function askJarvis(sessionId: string, userText: string): Promise<st
   history.push({ role: "user", content: userText });
 
   const response = await client().messages.create({
-    model: "claude-opus-4-8",
+    model: "claude-sonnet-4-6",
     max_tokens: 1024,
+    // Niedrige Latenz für ein flüssiges Sprachgespräch: kein langes "Nachdenken",
+    // Jarvis antwortet direkt.
+    thinking: { type: "disabled" },
     system: SYSTEM_PROMPT,
     messages: history.map((t) => ({ role: t.role, content: t.content })),
   });

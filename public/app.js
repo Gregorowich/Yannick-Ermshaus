@@ -1,7 +1,8 @@
-// J.A.R.V.I.S. – Frontend-Logik
+// J.A.R.V.I.S. – Frontend-Logik + HUD
 // Ablauf: einmal antippen zum Starten (schaltet auf iOS Mikrofon + Ton frei),
 //         dann Weckwort "Jarvis" (Porcupine) ODER Klick -> Aufnahme bis Stille
 //         -> Upload an /api/chat -> Antwort anzeigen + vorlesen.
+// Zusätzlich: animiertes HUD im Hintergrund + Kugel reagiert auf die Lautstärke.
 
 import { PorcupineWorker, BuiltInKeyword } from
   "https://cdn.jsdelivr.net/npm/@picovoice/porcupine-web@3.0.3/dist/esm/index.js";
@@ -12,12 +13,18 @@ const orb = document.getElementById("orb");
 const statusEl = document.getElementById("status");
 const youEl = document.getElementById("you");
 const jarvisEl = document.getElementById("jarvis");
+const canvas = document.getElementById("hud");
 
 const sessionId = crypto.randomUUID();
 let porcupine = null;
 let audioCtx = null;     // gemeinsamer, per Geste freigeschalteter Audio-Kontext
 let started = false;     // wurde die Start-Geste schon ausgeführt?
 let busy = false;        // Aufnahme/Verarbeitung/Sprechen läuft
+
+// Stimm-Reaktivität: aktiver Analyser (Mikro beim Zuhören, Wiedergabe beim Sprechen)
+let activeAnalyser = null;
+let activeData = null;
+let level = 0; // geglättete Lautstärke 0..1, steuert die Kugel
 
 // ---- Zustands-Anzeige -------------------------------------------------
 function setState(state, text) {
@@ -38,18 +45,40 @@ async function ensureAudio() {
   if (audioCtx.state === "suspended") await audioCtx.resume();
 }
 
+function rmsFrom(analyser, data) {
+  analyser.getByteTimeDomainData(data);
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = (data[i] - 128) / 128;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / data.length);
+}
+
 // ---- Start (einmalige Geste) -----------------------------------------
 async function start() {
   if (started) return;
-  setState("thinking", "Starte …");
   try {
-    await ensureAudio();      // Ton auf iOS freischalten
-    await initWakeWord();     // Mikrofon + Weckwort aktivieren
+    await ensureAudio(); // Ton auf iOS freischalten
+    // kurze Boot-Sequenz (Flavor)
+    await bootSequence();
+    await initWakeWord(); // Mikrofon + Weckwort aktivieren
     started = true;
   } catch (err) {
     console.error(err);
     setState("error", "Mikrofon nicht verfügbar. Bitte erlauben und Seite neu laden.");
   }
+}
+
+function delay(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function bootSequence() {
+  setState("thinking", "Systeme online …");
+  await delay(450);
+  setState("thinking", "Stimme kalibriert …");
+  await delay(450);
 }
 
 // ---- Weckwort (Porcupine) --------------------------------------------
@@ -61,13 +90,11 @@ async function initWakeWord() {
   } catch { /* ignoriert */ }
 
   if (!accessKey) {
-    // Kein Weckwort konfiguriert – App funktioniert per Klick weiter.
     setState("sleeping", "Tippe die Kugel zum Sprechen.");
     return;
   }
 
-  // Weckwort ist optional: scheitert die Einrichtung (falscher Schlüssel,
-  // Modellproblem), NICHT den Start abbrechen – auf Tippen zurückfallen.
+  // Weckwort ist optional: scheitert die Einrichtung, NICHT abbrechen.
   try {
     porcupine = await PorcupineWorker.create(
       accessKey,
@@ -86,7 +113,6 @@ async function initWakeWord() {
 
 async function onWakeWord() {
   if (busy) return;
-  // Mikrofon für die Aufnahme freigeben: Porcupine kurz pausieren.
   if (porcupine) await WebVoiceProcessor.unsubscribe(porcupine);
   try {
     await recordAndRespond();
@@ -107,32 +133,32 @@ async function recordCommand() {
   source.connect(analyser);
   const data = new Uint8Array(analyser.fftSize);
 
+  // Kugel reagiert nun auf das Mikrofon
+  activeAnalyser = analyser;
+  activeData = data;
+
   const recorder = new MediaRecorder(stream);
   const chunks = [];
   recorder.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
 
   return new Promise((resolve) => {
-    const SILENCE = 0.012;    // Schwelle für "leise"
-    const SILENCE_MS = 1200;  // so lange Stille -> Ende
-    const MAX_MS = 9000;      // Sicherheitslimit
+    const SILENCE = 0.012;
+    const SILENCE_MS = 1200;
+    const MAX_MS = 9000;
     let lastLoud = Date.now();
     const startedAt = Date.now();
 
     recorder.onstop = () => {
       clearInterval(timer);
+      activeAnalyser = null;
+      activeData = null;
       stream.getTracks().forEach((t) => t.stop());
       try { source.disconnect(); } catch { /* egal */ }
       resolve(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }));
     };
 
     const timer = setInterval(() => {
-      analyser.getByteTimeDomainData(data);
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) {
-        const v = (data[i] - 128) / 128;
-        sum += v * v;
-      }
-      const rms = Math.sqrt(sum / data.length);
+      const rms = rmsFrom(analyser, data);
       const now = Date.now();
       if (rms > SILENCE) lastLoud = now;
       if (now - lastLoud > SILENCE_MS || now - startedAt > MAX_MS) {
@@ -144,16 +170,28 @@ async function recordCommand() {
   });
 }
 
-// ---- Antwort-Audio über Web Audio abspielen (iOS-sicher) -------------
+// ---- Antwort-Audio über Web Audio abspielen (iOS-sicher) + reaktiv ----
 async function playAudioBase64(b64) {
   await ensureAudio();
   const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   const buffer = await audioCtx.decodeAudioData(bytes.buffer);
+
+  const analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  const data = new Uint8Array(analyser.fftSize);
+
   await new Promise((resolve) => {
     const src = audioCtx.createBufferSource();
     src.buffer = buffer;
-    src.connect(audioCtx.destination);
-    src.onended = resolve;
+    src.connect(analyser);
+    analyser.connect(audioCtx.destination);
+    activeAnalyser = analyser;
+    activeData = data;
+    src.onended = () => {
+      activeAnalyser = null;
+      activeData = null;
+      resolve();
+    };
     src.start();
   });
 }
@@ -205,3 +243,116 @@ orb.addEventListener("click", () => {
 });
 
 setState("sleeping", "Zum Starten antippen");
+
+// =====================================================================
+//  HUD-Hintergrund (Canvas) + Lautstärke-Glättung für die Kugel
+// =====================================================================
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+const particles = [];
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = canvas.width = Math.floor(window.innerWidth * DPR);
+  H = canvas.height = Math.floor(window.innerHeight * DPR);
+  canvas.style.width = window.innerWidth + "px";
+  canvas.style.height = window.innerHeight + "px";
+}
+window.addEventListener("resize", resize);
+resize();
+
+// Partikelfeld
+for (let i = 0; i < 64; i++) {
+  particles.push({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    r: (Math.random() * 1.4 + 0.3) * DPR,
+    vx: (Math.random() - 0.5) * 0.15 * DPR,
+    vy: (Math.random() - 0.5) * 0.15 * DPR,
+    a: Math.random() * 0.4 + 0.1,
+  });
+}
+
+function drawHud(t) {
+  ctx.clearRect(0, 0, W, H);
+  const cx = W / 2;
+  const cy = H * 0.46;
+  const base = Math.min(W, H);
+
+  // dezentes Partikelfeld
+  for (const p of particles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    if (p.x < 0) p.x = W; else if (p.x > W) p.x = 0;
+    if (p.y < 0) p.y = H; else if (p.y > H) p.y = 0;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(125, 211, 252, ${p.a * (0.5 + level * 0.5)})`;
+    ctx.fill();
+  }
+
+  // konzentrische, rotierende HUD-Bögen um die Kugel
+  const intensity = 0.12 + level * 0.5;
+  const rings = [
+    { r: base * 0.30, speed: 0.00008, dash: [6 * DPR, 26 * DPR], width: 1.2 * DPR, span: Math.PI * 1.4 },
+    { r: base * 0.37, speed: -0.00005, dash: [40 * DPR, 18 * DPR], width: 1 * DPR, span: Math.PI * 0.5 },
+    { r: base * 0.44, speed: 0.00003, dash: [2 * DPR, 14 * DPR], width: 1 * DPR, span: Math.PI * 2 },
+  ];
+  for (const ring of rings) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate((t * ring.speed) % (Math.PI * 2));
+    ctx.beginPath();
+    ctx.setLineDash(ring.dash);
+    ctx.arc(0, 0, ring.r, 0, ring.span);
+    ctx.strokeStyle = `rgba(56, 189, 248, ${intensity})`;
+    ctx.lineWidth = ring.width;
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.setLineDash([]);
+
+  // Eck-Klammern (HUD-Rahmen)
+  drawCorners(28 * DPR, 26 * DPR, 0.22);
+
+  // langsam wandernde Scan-Linie
+  const scanY = (Math.sin(t * 0.00018) * 0.5 + 0.5) * H;
+  const grd = ctx.createLinearGradient(0, scanY - 40 * DPR, 0, scanY + 40 * DPR);
+  grd.addColorStop(0, "rgba(56,189,248,0)");
+  grd.addColorStop(0.5, `rgba(56,189,248,${0.05 + level * 0.05})`);
+  grd.addColorStop(1, "rgba(56,189,248,0)");
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, scanY - 40 * DPR, W, 80 * DPR);
+}
+
+function drawCorners(len, pad, alpha) {
+  ctx.strokeStyle = `rgba(56, 189, 248, ${alpha})`;
+  ctx.lineWidth = 1.5 * DPR;
+  const corners = [
+    [pad, pad, 1, 1], [W - pad, pad, -1, 1],
+    [pad, H - pad, 1, -1], [W - pad, H - pad, -1, -1],
+  ];
+  for (const [x, y, sx, sy] of corners) {
+    ctx.beginPath();
+    ctx.moveTo(x, y + sy * len);
+    ctx.lineTo(x, y);
+    ctx.lineTo(x + sx * len, y);
+    ctx.stroke();
+  }
+}
+
+function loop(t) {
+  // Ziel-Lautstärke: aus aktivem Analyser, sonst sanfter Ruhepuls
+  let target;
+  if (activeAnalyser && activeData) {
+    target = Math.min(1, rmsFrom(activeAnalyser, activeData) * 4);
+  } else {
+    target = 0.06 + Math.sin(t * 0.002) * 0.04; // „atmet" leicht
+  }
+  level += (target - level) * 0.2;
+  document.documentElement.style.setProperty("--level", level.toFixed(3));
+
+  drawHud(t);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);

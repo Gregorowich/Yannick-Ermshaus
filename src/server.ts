@@ -65,6 +65,26 @@ app.post("/api/reset", express.json(), (req, res) => {
   res.json({ ok: true });
 });
 
+// Lebenszeichen (für den "Wachhalter" unten und Health-Checks).
+app.get("/healthz", (_req, res) => {
+  res.json({ ok: true });
+});
+
 app.listen(PORT, () => {
   console.log(`\n🤖 Jarvis läuft auf http://localhost:${PORT}\n`);
 });
+
+// --- Wachhalter gegen Render-Kaltstart -------------------------------------
+// Der kostenlose Render-Dienst "schläft" nach ~15 Min ohne Anfragen ein; der
+// nächste Aufruf dauert dann ~50 s. Solange RENDER_EXTERNAL_URL gesetzt ist
+// (von Render automatisch), pingt sich der Dienst alle 10 Min selbst wach.
+const SELF_URL = process.env.RENDER_EXTERNAL_URL;
+if (SELF_URL) {
+  const TEN_MINUTES = 10 * 60 * 1000;
+  setInterval(() => {
+    fetch(`${SELF_URL}/healthz`).catch(() => {
+      /* Netzwerkfehler ignorieren – nächster Versuch in 10 Min */
+    });
+  }, TEN_MINUTES).unref();
+  console.log("⏰ Wachhalter aktiv (Selbst-Ping alle 10 Min).");
+}

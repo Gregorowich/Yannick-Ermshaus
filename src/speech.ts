@@ -49,6 +49,13 @@ export async function synthesize(text: string): Promise<Buffer> {
     model: "gpt-4o-mini-tts",
     voice: "onyx", // tiefe, ruhige Stimme – passt zur Jarvis-Persona
     input: text,
+    // Steuert den Charakter der Stimme: ruhiger, gelassener Butler im Stil von
+    // J.A.R.V.I.S. aus Iron Man – höflich, souverän, leicht britisch-trocken.
+    instructions:
+      "Sprich Deutsch als J.A.R.V.I.S., der kultivierte Butler-Assistent aus " +
+      "Iron Man: ruhig, gelassen und souverän, höflich und diskret, mit einem " +
+      "Hauch trockener, britischer Eleganz. Mäßiges, gleichmäßiges Tempo, warme " +
+      "tiefe Stimme, klar artikuliert, niemals hektisch oder überschwänglich.",
     response_format: "mp3",
   });
 

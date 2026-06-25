@@ -12,16 +12,29 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon.svg" />
+    <!-- Sci-Fi-Schrift (mit System-Fallback, falls offline) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <main>
-      <h1>J.A.R.V.I.S.</h1>
+    <!-- Animierter HUD-Hintergrund -->
+    <canvas id="hud"></canvas>
 
-      <!-- Die leuchtende Kugel (Arc-Reactor-Look). Klassen steuern den Zustand. -->
+    <main>
+      <h1 class="title">J.A.R.V.I.S.</h1>
+
+      <!-- Die stimm-reaktive Kugel (Arc-Reactor / HUD-Look) -->
       <button id="orb" class="orb sleeping" aria-label="Jarvis aktivieren">
-        <span class="ring"></span>
+        <span class="ring ring-outer"></span>
+        <span class="ring ring-mid"></span>
+        <span class="reticle"></span>
         <span class="core"></span>
+        <span class="glow"></span>
       </button>
 
       <p id="status" class="status">Initialisiere …</p>
