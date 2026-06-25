@@ -66,14 +66,22 @@ async function initWakeWord() {
     return;
   }
 
-  porcupine = await PorcupineWorker.create(
-    accessKey,
-    [BuiltInKeyword.Jarvis],
-    onWakeWord,
-    { publicPath: "/models/porcupine_params.pv" },
-  );
-  await WebVoiceProcessor.subscribe(porcupine);
-  setState("sleeping", 'Bereit. Sag „Jarvis" …');
+  // Weckwort ist optional: scheitert die Einrichtung (falscher Schlüssel,
+  // Modellproblem), NICHT den Start abbrechen – auf Tippen zurückfallen.
+  try {
+    porcupine = await PorcupineWorker.create(
+      accessKey,
+      [BuiltInKeyword.Jarvis],
+      onWakeWord,
+      { publicPath: "/models/porcupine_params.pv" },
+    );
+    await WebVoiceProcessor.subscribe(porcupine);
+    setState("sleeping", 'Bereit. Sag „Jarvis" …');
+  } catch (err) {
+    console.warn("Weckwort nicht verfügbar, nutze Tippen:", err);
+    porcupine = null;
+    setState("sleeping", "Tippe die Kugel zum Sprechen.");
+  }
 }
 
 async function onWakeWord() {

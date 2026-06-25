@@ -13,5 +13,8 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      # Optional (nur fürs freihändige Weckwort "Jarvis"). Leer lassen ist ok –
+      # die App funktioniert dann per Tipp auf die Kugel. Bei Bedarf später im
+      # Render-Dashboard nachtragen.
       - key: PICOVOICE_ACCESS_KEY
-        sync: false
+        value: ""
