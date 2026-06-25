@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { askJarvis, resetHistory } from "./jarvis.js";
 import { transcribe, synthesize } from "./speech.js";
+import { getWeather, buildGreeting, type Weather } from "./weather.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
@@ -63,6 +64,32 @@ app.post("/api/chat", upload.single("audio"), async (req, res) => {
 app.post("/api/reset", express.json(), (req, res) => {
   resetHistory((req.body?.sessionId as string) || "default");
   res.json({ ok: true });
+});
+
+// Begrüßung beim Öffnen: Wetter holen (optional, via Standort) und als
+// gesprochenen Jarvis-Gruß zurückgeben.
+app.post("/api/greeting", express.json(), async (req, res) => {
+  try {
+    const lat = Number(req.body?.lat);
+    const lon = Number(req.body?.lon);
+    const hour = Number(req.body?.hour);
+
+    let weather: Weather | null = null;
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      try {
+        weather = await getWeather(lat, lon);
+      } catch (e) {
+        console.warn("Wetter konnte nicht geladen werden:", e);
+      }
+    }
+
+    const text = buildGreeting(hour, weather);
+    const audio = await synthesize(text);
+    res.json({ text, weather, audio: audio.toString("base64") });
+  } catch (err) {
+    console.error("Fehler in /api/greeting:", err);
+    res.status(500).json({ error: "Begrüßung fehlgeschlagen." });
+  }
 });
 
 // Lebenszeichen (für den "Wachhalter" unten und Health-Checks).

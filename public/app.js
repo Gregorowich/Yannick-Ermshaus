@@ -14,6 +14,23 @@ const statusEl = document.getElementById("status");
 const youEl = document.getElementById("you");
 const jarvisEl = document.getElementById("jarvis");
 const canvas = document.getElementById("hud");
+const waveCanvas = document.getElementById("wave");
+const sysStatusEl = document.getElementById("sysStatus");
+const weatherPanel = document.getElementById("weatherPanel");
+
+// ---- Live-Uhr (oben rechts) ------------------------------------------
+const clockEl = document.getElementById("clock");
+const dateEl = document.getElementById("date");
+function tickClock() {
+  const now = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  clockEl.textContent = `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
+  dateEl.textContent = now.toLocaleDateString("de-DE", {
+    weekday: "short", day: "2-digit", month: "2-digit", year: "numeric",
+  });
+}
+tickClock();
+setInterval(tickClock, 1000);
 
 const sessionId = crypto.randomUUID();
 let porcupine = null;
@@ -64,9 +81,63 @@ async function start() {
     await bootSequence();
     await initWakeWord(); // Mikrofon + Weckwort aktivieren
     started = true;
+    greet(); // Begrüßung + Wetter (läuft im Hintergrund weiter)
   } catch (err) {
     console.error(err);
     setState("error", "Mikrofon nicht verfügbar. Bitte erlauben und Seite neu laden.");
+  }
+}
+
+// ---- Begrüßung beim Öffnen (mit Wetter, wenn Standort erlaubt) --------
+function getPosition() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      () => resolve(null), // Ablehnung/Fehler -> ohne Wetter begrüßen
+      { timeout: 8000, maximumAge: 600000 },
+    );
+  });
+}
+
+function fillWeather(w) {
+  if (!w) return;
+  document.getElementById("wxTemp").textContent = w.tempC;
+  document.getElementById("wxDesc").textContent = w.description;
+  document.getElementById("wxFeels").textContent = w.feelsC + "°";
+  document.getElementById("wxHum").textContent = w.humidity + "%";
+  document.getElementById("wxMax").textContent = w.maxC + "°";
+  document.getElementById("wxWind").textContent = w.windKmh + " km/h";
+  document.getElementById("wxSunrise").textContent = w.sunrise;
+  document.getElementById("wxSunset").textContent = w.sunset;
+  weatherPanel.classList.remove("hidden");
+}
+
+async function greet() {
+  try {
+    if (sysStatusEl) sysStatusEl.textContent = "Standort wird ermittelt …";
+    const pos = await getPosition();
+    const res = await fetch("/api/greeting", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lat: pos?.lat, lon: pos?.lon, hour: new Date().getHours(),
+      }),
+    });
+    if (!res.ok) throw new Error("greeting " + res.status);
+    const { text, weather, audio } = await res.json();
+    fillWeather(weather);
+    if (sysStatusEl) sysStatusEl.textContent = "System bereit";
+    if (busy) return; // falls der Nutzer schon spricht: Gruß nicht überlagern
+    if (text) showBubble(jarvisEl, text);
+    if (audio) {
+      setState("speaking", "");
+      try { await playAudioBase64(audio); } catch (e) { console.warn(e); }
+      if (!busy) setState("sleeping", porcupine ? 'Bereit. Sag „Jarvis" …' : "Tippe die Kugel zum Sprechen.");
+    }
+  } catch (err) {
+    console.warn("Begrüßung übersprungen:", err);
+    if (sysStatusEl) sysStatusEl.textContent = "System bereit";
   }
 }
 
@@ -248,7 +319,9 @@ setState("sleeping", "Zum Starten antippen");
 //  HUD-Hintergrund (Canvas) + Lautstärke-Glättung für die Kugel
 // =====================================================================
 const ctx = canvas.getContext("2d");
+const wctx = waveCanvas.getContext("2d");
 let W = 0, H = 0, DPR = 1;
+let WW = 0, WH = 0;
 const particles = [];
 
 function resize() {
@@ -257,9 +330,41 @@ function resize() {
   H = canvas.height = Math.floor(window.innerHeight * DPR);
   canvas.style.width = window.innerWidth + "px";
   canvas.style.height = window.innerHeight + "px";
+
+  WW = waveCanvas.width = Math.floor(waveCanvas.clientWidth * DPR);
+  WH = waveCanvas.height = Math.floor(46 * DPR);
 }
 window.addEventListener("resize", resize);
 resize();
+
+// Voice-reaktive Waveform am unteren Rand.
+const waveData = new Uint8Array(256);
+function drawWave(t) {
+  if (!WW) return;
+  wctx.clearRect(0, 0, WW, WH);
+  const mid = WH / 2;
+  wctx.beginPath();
+  const N = waveData.length;
+  for (let i = 0; i < N; i++) {
+    let v;
+    if (activeAnalyser) {
+      activeAnalyser.getByteTimeDomainData(waveData);
+      v = (waveData[i] - 128) / 128;
+    } else {
+      // Ruhepuls: feine, langsam wandernde Sinuswelle
+      v = Math.sin(i * 0.18 + t * 0.004) * (0.06 + level * 0.1);
+    }
+    const x = (i / (N - 1)) * WW;
+    const y = mid + v * mid * 0.9;
+    i === 0 ? wctx.moveTo(x, y) : wctx.lineTo(x, y);
+  }
+  wctx.strokeStyle = `rgba(56, 189, 248, ${0.5 + level * 0.5})`;
+  wctx.lineWidth = 1.5 * DPR;
+  wctx.shadowBlur = 8 * DPR;
+  wctx.shadowColor = "rgba(56, 189, 248, 0.6)";
+  wctx.stroke();
+  wctx.shadowBlur = 0;
+}
 
 // Partikelfeld
 for (let i = 0; i < 64; i++) {
@@ -353,6 +458,7 @@ function loop(t) {
   document.documentElement.style.setProperty("--level", level.toFixed(3));
 
   drawHud(t);
+  drawWave(t);
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

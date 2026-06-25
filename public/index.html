@@ -5,14 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>J.A.R.V.I.S.</title>
     <meta name="theme-color" content="#04080f" />
-    <!-- Als App auf den iPad-Home-Bildschirm -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Jarvis" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon.svg" />
-    <!-- Sci-Fi-Schrift (mit System-Fallback, falls offline) -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -25,10 +23,37 @@
     <!-- Animierter HUD-Hintergrund -->
     <canvas id="hud"></canvas>
 
+    <!-- HUD-Panels (Cockpit-Rahmen) -->
+    <div class="frame">
+      <div class="panel tl">
+        <div class="panel-label">J.A.R.V.I.S. OS</div>
+        <div class="panel-line"><span id="sysStatus">System bereit</span></div>
+      </div>
+
+      <div class="panel tr">
+        <div id="clock" class="clock">--:--:--</div>
+        <div id="date" class="date">––</div>
+      </div>
+
+      <div class="panel weather hidden" id="weatherPanel">
+        <div class="panel-label">Wetter</div>
+        <div class="wx-temp"><span id="wxTemp">–</span>°</div>
+        <div class="wx-desc" id="wxDesc">–</div>
+        <div class="wx-grid">
+          <div>Gefühlt<b id="wxFeels">–</b></div>
+          <div>Feuchte<b id="wxHum">–</b></div>
+          <div>Max<b id="wxMax">–</b></div>
+          <div>Wind<b id="wxWind">–</b></div>
+          <div>Aufgang<b id="wxSunrise">–</b></div>
+          <div>Untergang<b id="wxSunset">–</b></div>
+        </div>
+      </div>
+    </div>
+
     <main>
       <h1 class="title">J.A.R.V.I.S.</h1>
 
-      <!-- Die stimm-reaktive Kugel (Arc-Reactor / HUD-Look) -->
+      <!-- Stimm-reaktiver Arc-Reaktor -->
       <button id="orb" class="orb sleeping" aria-label="Jarvis aktivieren">
         <span class="ring ring-outer"></span>
         <span class="ring ring-mid"></span>
@@ -48,6 +73,12 @@
         Sag <strong>„Jarvis"</strong> und stelle deine Frage – oder tippe auf die Kugel.
       </p>
     </main>
+
+    <!-- Fuß: Waveform + Stark-Logo -->
+    <div class="footer">
+      <canvas id="wave"></canvas>
+      <div class="stark">STARK INDUSTRIES</div>
+    </div>
 
     <script type="module" src="/app.js"></script>
   </body>

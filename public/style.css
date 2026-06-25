@@ -250,3 +250,118 @@ main {
 @media (prefers-reduced-motion: reduce) {
   .ring-outer, .ring-mid, .reticle, .orb.sleeping, .title { animation: none !important; }
 }
+
+/* =====================================================================
+   Cockpit-Rahmen: HUD-Panels (Uhr, Wetter, JARVIS OS, Stark-Footer)
+   ===================================================================== */
+.frame {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.panel {
+  position: absolute;
+  padding: 0.5rem 0.7rem;
+  background: rgba(8, 20, 36, 0.55);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  font-family: "Rajdhani", system-ui, sans-serif;
+  color: var(--accent-bright);
+}
+/* Eck-Akzent oben rechts an jedem Panel */
+.panel::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 10px;
+  height: 10px;
+  border-top: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+}
+.panel-label {
+  font-family: "Orbitron", sans-serif;
+  font-size: 0.55rem;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 0.15rem;
+}
+.panel-line { font-size: 0.8rem; letter-spacing: 0.06em; }
+
+.panel.tl { top: max(0.7rem, env(safe-area-inset-top)); left: 0.7rem; }
+.panel.tr { top: max(0.7rem, env(safe-area-inset-top)); right: 0.7rem; text-align: right; }
+.panel.tr::after { right: auto; left: -1px; border-right: none; border-left: 2px solid var(--accent); }
+
+.clock {
+  font-family: "Orbitron", sans-serif;
+  font-size: clamp(1rem, 4vw, 1.5rem);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 12px rgba(56, 189, 248, 0.5);
+}
+.date { font-size: 0.7rem; letter-spacing: 0.12em; color: var(--muted); text-transform: uppercase; }
+
+/* Wetter-Panel rechts unter der Uhr */
+.panel.weather {
+  top: clamp(4.2rem, 14vw, 6rem);
+  right: 0.7rem;
+  width: min(46vw, 200px);
+}
+.wx-temp {
+  font-family: "Orbitron", sans-serif;
+  font-size: clamp(1.6rem, 7vw, 2.4rem);
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 0 14px rgba(56, 189, 248, 0.5);
+}
+.wx-desc {
+  font-size: 0.85rem;
+  color: var(--accent);
+  margin: 0.1rem 0 0.4rem;
+  text-transform: capitalize;
+}
+.wx-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.15rem 0.5rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.wx-grid div { display: flex; justify-content: space-between; gap: 0.3rem; }
+.wx-grid b { color: var(--text); font-weight: 600; }
+
+/* Fuß: Waveform + Stark-Logo */
+.footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-bottom: max(0.4rem, env(safe-area-inset-bottom));
+}
+#wave {
+  width: 100%;
+  height: 46px;
+  display: block;
+  opacity: 0.8;
+}
+.stark {
+  font-family: "Orbitron", sans-serif;
+  font-size: 0.6rem;
+  letter-spacing: 0.45em;
+  text-indent: 0.45em;
+  color: var(--accent-dim);
+  margin-top: 0.1rem;
+}
+
+/* Auf sehr schmalen Hochkant-Screens Panels etwas zurücknehmen */
+@media (max-width: 520px) {
+  .panel.weather { width: min(42vw, 165px); }
+}
