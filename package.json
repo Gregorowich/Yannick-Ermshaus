@@ -4,8 +4,9 @@
   "description": "Jarvis – ein Sprachassistent im Iron-Man-Stil (Weckwort, Deutsch, menschliche Stimme)",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/fetch-model.mjs",
     "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
+    "start": "node dist/server.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

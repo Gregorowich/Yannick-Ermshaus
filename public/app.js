@@ -1,5 +1,6 @@
 // J.A.R.V.I.S. – Frontend-Logik
-// Ablauf: Weckwort "Jarvis" (Porcupine) ODER Klick -> Aufnahme bis Stille
+// Ablauf: einmal antippen zum Starten (schaltet auf iOS Mikrofon + Ton frei),
+//         dann Weckwort "Jarvis" (Porcupine) ODER Klick -> Aufnahme bis Stille
 //         -> Upload an /api/chat -> Antwort anzeigen + vorlesen.
 
 import { PorcupineWorker, BuiltInKeyword } from
@@ -11,44 +12,68 @@ const orb = document.getElementById("orb");
 const statusEl = document.getElementById("status");
 const youEl = document.getElementById("you");
 const jarvisEl = document.getElementById("jarvis");
-const player = document.getElementById("player");
 
 const sessionId = crypto.randomUUID();
 let porcupine = null;
-let busy = false; // true während Aufnahme/Verarbeitung/Sprechen
+let audioCtx = null;     // gemeinsamer, per Geste freigeschalteter Audio-Kontext
+let started = false;     // wurde die Start-Geste schon ausgeführt?
+let busy = false;        // Aufnahme/Verarbeitung/Sprechen läuft
 
 // ---- Zustands-Anzeige -------------------------------------------------
 function setState(state, text) {
   orb.className = "orb " + state;
   if (text !== undefined) statusEl.textContent = text;
 }
-
 function showBubble(el, text) {
   el.textContent = text;
   el.classList.remove("hidden");
 }
 
+// ---- Audio-Kontext (iOS: muss aus einer Nutzer-Geste heraus laufen) ---
+async function ensureAudio() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx.state === "suspended") await audioCtx.resume();
+}
+
+// ---- Start (einmalige Geste) -----------------------------------------
+async function start() {
+  if (started) return;
+  setState("thinking", "Starte …");
+  try {
+    await ensureAudio();      // Ton auf iOS freischalten
+    await initWakeWord();     // Mikrofon + Weckwort aktivieren
+    started = true;
+  } catch (err) {
+    console.error(err);
+    setState("error", "Mikrofon nicht verfügbar. Bitte erlauben und Seite neu laden.");
+  }
+}
+
 // ---- Weckwort (Porcupine) --------------------------------------------
 async function initWakeWord() {
+  let accessKey = "";
   try {
     const res = await fetch("/api/config");
-    const { picovoiceAccessKey } = await res.json();
-    if (!picovoiceAccessKey) throw new Error("Kein Picovoice-Schlüssel konfiguriert.");
+    accessKey = (await res.json()).picovoiceAccessKey || "";
+  } catch { /* ignoriert */ }
 
-    porcupine = await PorcupineWorker.create(
-      picovoiceAccessKey,
-      [BuiltInKeyword.Jarvis],
-      onWakeWord,
-      { publicPath: "/models/porcupine_params.pv" },
-    );
-
-    await WebVoiceProcessor.subscribe(porcupine);
-    setState("sleeping", 'Bereit. Sag „Jarvis" …');
-  } catch (err) {
-    console.warn("Weckwort nicht verfügbar:", err);
-    // Fallback: App funktioniert weiter per Klick auf die Kugel.
-    setState("sleeping", "Klicke die Kugel zum Sprechen (Weckwort nicht aktiv).");
+  if (!accessKey) {
+    // Kein Weckwort konfiguriert – App funktioniert per Klick weiter.
+    setState("sleeping", "Tippe die Kugel zum Sprechen.");
+    return;
   }
+
+  porcupine = await PorcupineWorker.create(
+    accessKey,
+    [BuiltInKeyword.Jarvis],
+    onWakeWord,
+    { publicPath: "/models/porcupine_params.pv" },
+  );
+  await WebVoiceProcessor.subscribe(porcupine);
+  setState("sleeping", 'Bereit. Sag „Jarvis" …');
 }
 
 async function onWakeWord() {
@@ -66,9 +91,8 @@ async function onWakeWord() {
 // ---- Aufnahme mit Stille-Erkennung -----------------------------------
 async function recordCommand() {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  await ensureAudio();
 
-  // Stille-Erkennung über die Web-Audio-API.
-  const audioCtx = new AudioContext();
   const source = audioCtx.createMediaStreamSource(stream);
   const analyser = audioCtx.createAnalyser();
   analyser.fftSize = 2048;
@@ -80,16 +104,16 @@ async function recordCommand() {
   recorder.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
 
   return new Promise((resolve) => {
-    const SILENCE = 0.012; // Schwelle für "leise"
-    const SILENCE_MS = 1200; // so lange Stille -> Ende
-    const MAX_MS = 9000; // Sicherheitslimit
+    const SILENCE = 0.012;    // Schwelle für "leise"
+    const SILENCE_MS = 1200;  // so lange Stille -> Ende
+    const MAX_MS = 9000;      // Sicherheitslimit
     let lastLoud = Date.now();
-    const started = Date.now();
+    const startedAt = Date.now();
 
-    recorder.onstop = async () => {
+    recorder.onstop = () => {
       clearInterval(timer);
       stream.getTracks().forEach((t) => t.stop());
-      await audioCtx.close();
+      try { source.disconnect(); } catch { /* egal */ }
       resolve(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }));
     };
 
@@ -103,13 +127,26 @@ async function recordCommand() {
       const rms = Math.sqrt(sum / data.length);
       const now = Date.now();
       if (rms > SILENCE) lastLoud = now;
-
-      if (now - lastLoud > SILENCE_MS || now - started > MAX_MS) {
+      if (now - lastLoud > SILENCE_MS || now - startedAt > MAX_MS) {
         if (recorder.state !== "inactive") recorder.stop();
       }
     }, 100);
 
     recorder.start();
+  });
+}
+
+// ---- Antwort-Audio über Web Audio abspielen (iOS-sicher) -------------
+async function playAudioBase64(b64) {
+  await ensureAudio();
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const buffer = await audioCtx.decodeAudioData(bytes.buffer);
+  await new Promise((resolve) => {
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(audioCtx.destination);
+    src.onended = resolve;
+    src.start();
   });
 }
 
@@ -125,12 +162,12 @@ async function recordAndRespond() {
 
     setState("thinking", "Einen Moment …");
     const form = new FormData();
-    form.append("audio", blob, "aufnahme.webm");
+    form.append("audio", blob, "aufnahme");
     form.append("sessionId", sessionId);
 
     const res = await fetch("/api/chat", { method: "POST", body: form });
     if (!res.ok) throw new Error("Serverfehler " + res.status);
-    const { transcript, reply, audio, audioMime } = await res.json();
+    const { transcript, reply, audio } = await res.json();
 
     if (!transcript) {
       setState("sleeping", "Ich habe nichts verstanden.");
@@ -141,9 +178,7 @@ async function recordAndRespond() {
 
     if (audio) {
       setState("speaking", "");
-      player.src = `data:${audioMime};base64,${audio}`;
-      await player.play().catch(() => {});
-      await new Promise((r) => (player.onended = r));
+      try { await playAudioBase64(audio); } catch (e) { console.warn("Wiedergabe:", e); }
     }
     setState("sleeping", 'Bereit. Sag „Jarvis" …');
   } catch (err) {
@@ -155,9 +190,10 @@ async function recordAndRespond() {
   }
 }
 
-// Klick auf die Kugel = manuelles Auslösen (Fallback / ohne Weckwort).
+// Klick auf die Kugel: erst Start-Geste, danach manuelles Auslösen.
 orb.addEventListener("click", () => {
+  if (!started) { start(); return; }
   if (!busy) recordAndRespond();
 });
 
-initWakeWord();
+setState("sleeping", "Zum Starten antippen");

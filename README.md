@@ -41,6 +41,47 @@ Persönlichkeit ist dieselbe wie in der Web-App.
 
 # Variante A: Selbst gehostete Web-App
 
+## 📱 Online stellen fürs iPad (ohne eigenen Computer)
+
+So bekommst du den echten Jarvis (leuchtende Kugel + Weckwort „Jarvis") in den
+**Safari auf dem iPad** – komplett vom iPad-Browser aus eingerichtet.
+
+**Schritt 1 – Drei Schlüssel anlegen** (jeweils Konto erstellen, Schlüssel kopieren):
+- **Anthropic** (das „Gehirn"): https://console.anthropic.com/ → *API Keys* → *Create Key*
+- **OpenAI** (Stimme + Verstehen): https://platform.openai.com/ → *API keys* → *Create*
+- **Picovoice** (Weckwort, kostenlos): https://console.picovoice.ai/ → *AccessKey* kopieren
+
+> 💳 Anthropic und OpenAI brauchen eine hinterlegte Zahlungsmethode. Die Kosten
+> sind klein (meist Cent-Beträge pro Gespräch), aber nicht null. Picovoice ist
+> kostenlos.
+
+**Schritt 2 – Online stellen mit Render (kostenlos):**
+1. Geh auf **https://render.com** und melde dich an (am einfachsten „Sign in with GitHub").
+2. Klicke **New → Blueprint**.
+3. Verbinde dein GitHub-Konto und wähle das Repository **`Yannick-Ermshaus`**,
+   Branch **`claude/ai-voice-assistant-22w2kv`**. Render erkennt die Datei
+   `render.yaml` automatisch.
+4. Render fragt nach den drei Schlüsseln aus Schritt 1 – trage sie ein
+   (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `PICOVOICE_ACCESS_KEY`).
+5. Klicke **Apply** / **Deploy** und warte, bis der Status **„Live"** ist.
+   Du bekommst eine Adresse wie `https://jarvis-xxxx.onrender.com`.
+
+**Schritt 3 – Auf dem iPad benutzen:**
+1. Öffne die Render-Adresse in **Safari**.
+2. Tippe einmal auf die **Kugel** (das schaltet Mikrofon und Ton frei) und
+   **erlaube den Mikrofon-Zugriff**.
+3. Sag **„Jarvis"** und stelle deine Frage – er antwortet mit Stimme. 🎙️
+
+**Schritt 4 – Als App ablegen:** In Safari auf **Teilen → „Zum Home-Bildschirm"**.
+Dann hast du ein Jarvis-Symbol wie eine echte App.
+
+> ℹ️ **Ehrlich:** Das Weckwort hört nur, solange die Jarvis-Seite **offen und im
+> Vordergrund** ist – ein Browser darf auf dem iPad nicht im Hintergrund
+> dauerhaft mithören. Auf dem kostenlosen Render-Tarif „schläft" der Dienst bei
+> Nichtnutzung; der erste Aufruf danach dauert dann ein paar Sekunden länger.
+
+---
+
 ## Wie es funktioniert
 
 | Baustein | Technologie |
@@ -65,21 +106,14 @@ OpenAI macht daraus Sprache → der Browser liest sie vor.
 ## Einrichtung
 
 ```bash
-# 1. Abhängigkeiten installieren
+# 1. Abhängigkeiten installieren (lädt auch das Weckwort-Modell automatisch)
 npm install
 
 # 2. Konfiguration anlegen und Schlüssel eintragen
 cp .env.example .env
 #   -> .env öffnen und ANTHROPIC_API_KEY, OPENAI_API_KEY, PICOVOICE_ACCESS_KEY ausfüllen
 
-# 3. Weckwort-Modell bereitstellen (für "Jarvis")
-#    Lade porcupine_params.pv herunter und lege es unter public/models/ ab:
-mkdir -p public/models
-#    Download:
-#    https://github.com/Picovoice/porcupine/raw/master/lib/common/porcupine_params.pv
-#    -> speichern als public/models/porcupine_params.pv
-
-# 4. Starten
+# 3. Starten
 npm run dev
 ```
 

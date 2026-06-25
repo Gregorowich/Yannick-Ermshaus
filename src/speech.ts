@@ -12,9 +12,24 @@ function openaiClient(): OpenAI {
  * Wandelt aufgenommenes Audio (z. B. webm/opus aus dem Browser) in deutschen Text um.
  * Nutzt OpenAI Whisper.
  */
+// Ordnet den MIME-Typ der Aufnahme einer Dateiendung zu, die Whisper akzeptiert.
+// iOS-Safari liefert z. B. "audio/mp4", Desktop-Chrome "audio/webm".
+const EXT_BY_MIME: Record<string, string> = {
+  "audio/webm": "webm",
+  "audio/ogg": "ogg",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+  "audio/mp4": "mp4",
+  "audio/m4a": "m4a",
+  "audio/x-m4a": "m4a",
+  "audio/aac": "aac",
+  "audio/mpeg": "mp3",
+};
+
 export async function transcribe(audio: Buffer, mimeType = "audio/webm"): Promise<string> {
-  const ext = mimeType.includes("ogg") ? "ogg" : mimeType.includes("wav") ? "wav" : "webm";
-  const file = await toFile(audio, `aufnahme.${ext}`, { type: mimeType });
+  const base = mimeType.split(";")[0].trim().toLowerCase();
+  const ext = EXT_BY_MIME[base] ?? "webm";
+  const file = await toFile(audio, `aufnahme.${ext}`, { type: base });
 
   const result = await openaiClient().audio.transcriptions.create({
     file,

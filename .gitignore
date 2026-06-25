@@ -3,3 +3,6 @@ dist/
 .env
 *.log
 .DS_Store
+
+# Wird beim Build automatisch geladen (scripts/fetch-model.mjs)
+public/models/
