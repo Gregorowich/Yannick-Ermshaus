@@ -1,0 +1,20 @@
+# Render-Blueprint: stellt Jarvis mit einem Klick online (https).
+# Anleitung in der README, Abschnitt „Online stellen fürs iPad".
+services:
+  - type: web
+    name: jarvis
+    runtime: node
+    plan: free
+    branch: claude/ai-voice-assistant-22w2kv
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      # Optional (nur fürs freihändige Weckwort "Jarvis"). Leer lassen ist ok –
+      # die App funktioniert dann per Tipp auf die Kugel. Bei Bedarf später im
+      # Render-Dashboard nachtragen.
+      - key: PICOVOICE_ACCESS_KEY
+        value: ""
